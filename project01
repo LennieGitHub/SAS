@@ -1,0 +1,237 @@
+/* Partie 1 - Création de notre librairie et de nos macro-variables */
+
+libname libTrav "C:\Users\Lennie\Documents\Etudes\EURIA\M1\SAS\06.Eléments Projets\Groupe 3";
+		/* Ici nous affectons à la librairie LibTravail le dossier réel où nous souhaitons travailler. */
+		
+	/* Paramètres macro-variables */
+	%let AnneeCalcul=2013; /* Année de calcul utilisée */
+	%let RepertoireTravail= C:\Users\Lennie\Documents\Etudes\EURIA\M1\SAS\06.Eléments Projets\Groupe 3;
+
+
+/* Partie 2 - Importation des données */
+	
+	proc import 	datafile="&RepertoireTravail./Base_Contrats3.csv" /* Fichier à importer */
+					out=libTrav.BaseCnts /* La table SAS BaseCnts générée par l'importation est rangée dans la librairie libTrav */
+					dbms=dlm 
+					replace; 
+	            	delimiter=';'; 
+ 		            getnames=yes; 
+	run; 
+
+	proc import 	datafile="&RepertoireTravail./Base_Mouvements3.csv" /* Fichier à importer */
+					out=libTrav.BaseMvts 
+					dbms=dlm 
+					replace;
+		            delimiter=';'; 
+ 		            getnames=yes; 
+	run;
+	proc import 	datafile="&RepertoireTravail./TF0002.csv"
+					out=libTrav.BaseTF0002
+					dbms=dlm
+					replace;
+	             	delimiter=';';
+ 		            getnames=yes;
+    run; 
+	proc import 	datafile="&RepertoireTravail./TH002.csv"
+					out=libTrav.BaseTH002
+					dbms=dlm
+					replace;
+	             	delimiter=';';
+ 		            getnames=yes;
+    run; 
+	
+/* Partie 3 - On initialise notre première table en commençant les calculs */
+	
+		data libTrav.BaseGens_&AnneeCalcul.; /* La nouvelle table s'appellera donc BaseGens_2013 */
+			set libTrav.BaseCnts;
+			age=&AnneeCalcul - year(DatNaiss); /* On utilise ici la valeur de la macro-variable 'AnneeCalcul' ; 
+			Nb_contrat=1; /* Au début de la projection, chaque contrat vaut 1 puis il va décroitre avec le RP RT TxMorta */
+
+			if Fonds="EUR"; /* Nous ne conservons que les lignes pour lesquelles le code de situation est "En euro".*/
+			if CodSitu="En Cours";			
+					
+			CoutCourtier=PM;
+			if Reseau='Courtier' then CoutCourtier=PM*0.40/100 ;
+					else CoutCourtier=0;
+
+			Seuil=PM/1000;  /* On définit un seuil tq si ce seuil>PM alors PM=0 */
+			FraisGestion=PM*1/100;
+			CoutVariable=PM*2/100;
+			ParticipationB=PM*3/100;		/* Revalorisation des en cours de 3% */
+			PrelevementPB=ParticipationB*15/100;
+			CoutUnitaire=5*Nb_contrat;
+			Resultat=FraisGestion+PrelevementPB-CoutVariable-CoutUnitaire-CoutCourtier;
+
+			drop Civilite CSP TypFisc Pays DatDC FreqChgts ChargementsSous CommSous DatEffet ChargementsGestion TxGaranti CodSitu; 
+			
+			run;
+ 
+	data tx_morta_h; /*on crée une table provisoire pour calculer le taux de mortalité des hommes*/
+	set libTrav.BaseTH002;
+	Lx2=lag(Lx);
+	tx_morta_h=(Lx2-Lx)/Lx2;
+	age2=lag(age);
+	drop age;
+	run;
+
+	data BaseTH002;
+	set tx_morta_h (rename=(age2=age));
+	run;
+
+	data BaseTH002; /*on ne garde que l'age et le taux de mortalité*/
+	set BaseTH002;
+	keep age tx_morta_h;
+	run;
+
+	data tx_morta_f; /*on crée une table provisoire pour calculer le taux de mortalité des femmes*/
+	set libTrav.BaseTF0002;
+	Lx2=lag(Lx);
+	tx_morta_f=(Lx2-Lx)/Lx2;
+	age2=lag(age);
+	drop age;
+	run;
+
+	data BaseTF002;
+	set tx_morta_f (rename=(age2=age));
+	run;
+
+	data BaseTF002; /*on ne garde que l'age et le taux de mortalité*/
+	set BaseTF002;
+	keep age tx_morta_f;
+	run;
+
+	data Basegens_&AnneeCalcul;
+	set libTrav.Basegens_&AnneeCalcul;
+	run; 
+
+	proc sort data=Basegens_&AnneeCalcul; /* On tri la table par âge */
+	by age; 
+	run;
+
+	data probadc2013;
+	merge BaseTH002(in=a) BaseTF002(in=b) Basegens_&AnneeCalcul(in=c);
+	by age; 
+	if c;
+	run; /*on merge les taux de mortalités hommes et femmes avec l'age correspondant*/
+
+	data libtrav.Basegens_&AnneeCalcul;
+	set probadc2013;
+	if sexe="F" then tx_morta=tx_morta_f; else tx_morta=tx_morta_h; /*on fait correspondre le bon taux de mortalité en fct du sexe*/
+	drop tx_morta_f tx_morta_h; /*on supprime les deux colonnes avec les taux de mortalités hommes et femmes*/
+	run;
+
+	proc means data=libTrav.BaseGens_&AnneeCalcul. sum;
+   	var Resultat; 
+	title 'Resultat de lannée'; 
+	output out=ResultatTotal_&AnneeCalcul.(drop=_TYPE_ _FREQ_) sum=result_&AnneeCalcul.;
+	run;
+
+	proc means data=libTrav.BaseGens_&AnneeCalcul. sum;
+   	var Nb_contrat; 
+	title 'Nombre restant de contrat'; 
+	output out=NbCnts_&AnneeCalcul.(drop=_TYPE_ _FREQ_) sum=NbCnts_&AnneeCalcul.;
+	run;
+
+	data libTrav.BaseGens_&AnneeCalcul.; 
+	merge NbCnts_&AnneeCalcul(in=a) ResultatTotal_&AnneeCalcul(in=b) libTrav.Basegens_&AnneeCalcul(in=c);
+	if c ;
+	resultatAct_2013=result_&AnneeCalcul.;
+	PVFPbrute=resultatAct_2013;
+	drop resultatAct_2013;
+	run;
+		
+
+
+	/* Partie 4 - On projette année après année le portefeuille en faisant vieillir les gens qui le composent et en actualisant le résultat*/
+
+%macro Projection (NbIterations);
+	%do i = 1 %to &NbIterations. %by 1;
+
+%let Annee_increment=%eval(&AnneeCalcul.+&i.);
+%let Annee_increment_av=%eval(&AnneeCalcul.+&i.-1);
+
+	data libTrav.BaseGens_&Annee_increment.; /* La nouvelle table s'appellera donc BaseGens_2014 */
+	set libTrav.BaseGens_&Annee_increment_av.;
+	age=age+1; /* On incrémente l'âge d'une année */
+	Nb_contrat=Nb_contrat*(1-tx_morta)*(1-1.3/100)*(1-4.1/100); /*on calcule la nouvelle quantité de contrats qui restent*/
+	run;
+
+	data BaseGens_&Annee_increment; /*table provisoire utilisé pour travailler*/
+	set libTrav.BaseGens_&Annee_increment;
+	run; 
+
+	data probadc_&Annee_increment.;
+	merge BaseTH002(in=a) BaseTF002(in=b) BaseGens_&Annee_increment(in=c);
+	by age; 
+	if c;
+	run; /*on merge colle les taux de mortalités hommes et femmes avec l'age correspondant*/
+
+	data Libtrav.BaseGens_&Annee_increment;
+	set probadc_&Annee_increment.;
+	if sexe="F" then tx_morta=tx_morta_f; else tx_morta=tx_morta_h; /*on fait correspondre le bon taux de mortalité en fct du sexe*/
+	PM=PM*Nb_contrat-FraisGestion+ParticipationB-PrelevementPB; /*calcul de notre nouvelle PM*/
+			CoutCourtier=PM;
+			if Reseau='Courtier' then CoutCourtier=PM*0.40/100 ;
+					else CoutCourtier=0;
+			FraisGestion=PM*1/100;
+			CoutVariable=PM*2/100;
+			ParticipationB=PM*3/100;
+			PrelevementPB=ParticipationB*15/100;
+			CoutUnitaire=5*Nb_contrat;
+			Resultat=FraisGestion+PrelevementPB-CoutVariable-CoutUnitaire-CoutCourtier;
+			if PM<Seuil then PM=0; else PM=PM;   /* On applique notre condition avec le seuil*/
+			if PM=0 then Nb_contrat=0; else Nb_contrat=Nb_contrat; /* Si la PM=0 alors cela signifie que le contrat est retiré du portefeuille */
+	drop tx_morta_f tx_morta_h; /* On supprime les deux colonnes avec les taux de mortalités hommes et femmes */
+	run;
+
+	data probadc_&Annee_increment.; /*table réaffectée provisoire*/
+	set Libtrav.BaseGens_&Annee_increment;
+	run;
+
+	/*Actualisation de notre résultat*/
+
+	proc means data=libTrav.BaseGens_&Annee_increment. sum; /*Calcul du résultat de l'année*/
+   					var Resultat; 
+					title 'Resultat de lannée'; 
+					output out=ResultatTotal_&Annee_increment.(drop=_TYPE_ _FREQ_) sum=result_&Annee_increment.;
+					run;
+
+	proc means data=libTrav.BaseGens_&Annee_increment. sum; /*Calcul du nombre de contrats restants*/
+   					var Nb_contrat; 
+					title 'Nombre restant de contrat'; 
+					output out=NbCnts_&Annee_increment.(drop=_TYPE_ _FREQ_) sum=NbCnts_&Annee_increment.;
+					run;
+
+	data libTrav.BaseGens_&Annee_increment.; 
+		merge NbCnts_&Annee_increment(in=a) ResultatTotal_&Annee_increment(in=b) libtrav.Basegens_&Annee_increment(in=c);
+		if c;
+		resultatAct_&Annee_increment.=result_&Annee_increment./(1+1.28/100)**(&i.); /*Taux d'actualisation TME 10/2014 = 1.28% */
+		PVFPbrute=PVFPbrute+resultatAct_&Annee_increment.;
+		if Nb_contrat>0; 	/* On ne garde que les individus qui ont un contrat */
+		drop result_&Annee_increment_av NbCnts_&Annee_increment_av resultatAct_&Annee_increment.;
+		run;
+
+%end;
+
+%mend;
+
+%Projection(15);
+
+
+	proc means data=libTrav.BaseGens_&AnneeCalcul. sum;
+   	var PM; 
+	title 'Total des en cours'; 
+	output out=TotalPM(drop=_TYPE_ _FREQ_) sum=PM_Total;
+	run;
+
+	%let Annee_proj=%eval(&AnneeCalcul.+15); /* On doit initialiser avec le nombre d'annee sur lequel on projette */
+
+	data libTrav.PresentationResultat;
+	merge libTrav.Basegens_&Annee_proj(in=a) TotalPM(in=b);
+	if b ;
+	IFM=PVFPbrute/PM_Total;
+	keep PVFPbrute IFM NbCnts_Annee_proj;
+	run;
+
+
+
